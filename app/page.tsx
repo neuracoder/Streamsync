@@ -5,6 +5,8 @@ import { Play, Pause, Volume2, VolumeX, Music, Video, Youtube } from 'lucide-rea
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/hooks/use-toast'
 import { Toaster } from '@/components/ui/toaster'
+import { APIService } from '@/lib/api-service'
+import { toast as sonnerToast } from 'sonner'
 
 export default function YouTubePlayer() {
   const [url, setUrl] = useState('')
@@ -21,9 +23,12 @@ export default function YouTubePlayer() {
   const [duration, setDuration] = useState(0)
   const [volume, setVolume] = useState(1)
   const [isMuted, setIsMuted] = useState(false)
-  
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  const [useBackendAudio, setUseBackendAudio] = useState(true)
+
   const videoRef = useRef<HTMLIFrameElement>(null)
   const playerRef = useRef<any>(null)
+  const audioRef = useRef<HTMLAudioElement>(null)
   const { toast } = useToast()
 
   // Initialize YouTube IFrame API
@@ -76,7 +81,7 @@ export default function YouTubePlayer() {
       /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
       /^([a-zA-Z0-9_-]{11})$/
     ]
-    
+
     for (const pattern of patterns) {
       const match = urlString.match(pattern)
       if (match) return match[1]
@@ -84,10 +89,84 @@ export default function YouTubePlayer() {
     return null
   }
 
+  // Extract audio using backend API
+  const handleExtractAudio = async (youtubeUrl: string) => {
+    setIsLoading(true)
+    sonnerToast.loading('Extrayendo audio desde backend...')
+
+    try {
+      const result = await APIService.extractStream(youtubeUrl)
+
+      if (result.success && result.audioUrl) {
+        setAudioUrl(result.audioUrl)
+        setVideoData({
+          title: result.title || 'Unknown Title',
+          channel: result.channel || 'Unknown Channel',
+          thumbnail: result.thumbnail || '',
+          videoId: extractVideoId(youtubeUrl) || '',
+        })
+        setDuration(result.duration || 0)
+        setIsLoading(false)
+        sonnerToast.success('Audio listo para reproducir!')
+
+        // Setup MediaSession for lockscreen controls
+        if ('mediaSession' in navigator && result.title) {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: result.title,
+            artist: result.channel || 'YouTube',
+            artwork: result.thumbnail ? [
+              { src: result.thumbnail, sizes: '512x512', type: 'image/jpeg' }
+            ] : []
+          })
+
+          // Setup media session handlers for audio element
+          navigator.mediaSession.setActionHandler('play', () => {
+            audioRef.current?.play()
+            setIsPlaying(true)
+          })
+
+          navigator.mediaSession.setActionHandler('pause', () => {
+            audioRef.current?.pause()
+            setIsPlaying(false)
+          })
+
+          navigator.mediaSession.setActionHandler('seekbackward', () => {
+            if (audioRef.current) {
+              audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 10)
+            }
+          })
+
+          navigator.mediaSession.setActionHandler('seekforward', () => {
+            if (audioRef.current) {
+              audioRef.current.currentTime = Math.min(audioRef.current.duration, audioRef.current.currentTime + 10)
+            }
+          })
+        }
+      } else {
+        toast({
+          title: 'Error',
+          description: result.error || 'Error al extraer audio',
+          variant: 'destructive',
+        })
+        setIsLoading(false)
+      }
+    } catch (error) {
+      console.error('Error:', error)
+      toast({
+        title: 'Error de conexión',
+        description: 'No se pudo conectar con el servidor',
+        variant: 'destructive',
+      })
+      setIsLoading(false)
+    } finally {
+      sonnerToast.dismiss()
+    }
+  }
+
   const loadVideo = async () => {
     const videoId = extractVideoId(url)
-    
-    if (!videoId) {
+
+    if (!videoId && !url.includes('youtube.com') && !url.includes('youtu.be')) {
       toast({
         title: 'Invalid URL',
         description: 'Please enter a valid YouTube URL or video ID',
@@ -96,6 +175,13 @@ export default function YouTubePlayer() {
       return
     }
 
+    // Use backend API for audio extraction
+    if (useBackendAudio) {
+      await handleExtractAudio(url)
+      return
+    }
+
+    // Fallback to YouTube IFrame API
     setIsLoading(true)
 
     try {
@@ -119,7 +205,7 @@ export default function YouTubePlayer() {
               title: data.title,
               channel: data.author,
               thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
-              videoId: videoId,
+              videoId: videoId || '',
             })
             setDuration(event.target.getDuration())
             setIsLoading(false)
@@ -145,8 +231,19 @@ export default function YouTubePlayer() {
   }
 
   const togglePlayPause = () => {
+    // Handle audio element controls
+    if (audioUrl && audioRef.current) {
+      if (isPlaying) {
+        audioRef.current.pause()
+      } else {
+        audioRef.current.play()
+      }
+      return
+    }
+
+    // Handle YouTube IFrame API controls
     if (!playerRef.current) return
-    
+
     if (isPlaying) {
       playerRef.current.pauseVideo()
     } else {
@@ -157,17 +254,48 @@ export default function YouTubePlayer() {
   const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newTime = parseFloat(e.target.value)
     setCurrentTime(newTime)
+
+    // Handle audio element
+    if (audioUrl && audioRef.current) {
+      audioRef.current.currentTime = newTime
+      return
+    }
+
+    // Handle YouTube IFrame
     playerRef.current?.seekTo(newTime, true)
   }
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newVolume = parseFloat(e.target.value)
     setVolume(newVolume)
-    playerRef.current?.setVolume(newVolume * 100)
     setIsMuted(newVolume === 0)
+
+    // Handle audio element
+    if (audioUrl && audioRef.current) {
+      audioRef.current.volume = newVolume
+      return
+    }
+
+    // Handle YouTube IFrame
+    playerRef.current?.setVolume(newVolume * 100)
   }
 
   const toggleMute = () => {
+    // Handle audio element
+    if (audioUrl && audioRef.current) {
+      if (isMuted) {
+        audioRef.current.muted = false
+        setVolume(1)
+        audioRef.current.volume = 1
+      } else {
+        audioRef.current.muted = true
+        setVolume(0)
+      }
+      setIsMuted(!isMuted)
+      return
+    }
+
+    // Handle YouTube IFrame
     if (isMuted) {
       playerRef.current?.unMute()
       setVolume(1)
@@ -181,13 +309,49 @@ export default function YouTubePlayer() {
   // Update current time
   useEffect(() => {
     const interval = setInterval(() => {
-      if (playerRef.current && isPlaying) {
+      // Update from audio element
+      if (audioUrl && audioRef.current) {
+        setCurrentTime(audioRef.current.currentTime)
+        if (!duration && audioRef.current.duration) {
+          setDuration(audioRef.current.duration)
+        }
+      }
+      // Update from YouTube IFrame
+      else if (playerRef.current && isPlaying) {
         setCurrentTime(playerRef.current.getCurrentTime())
       }
     }, 1000)
 
     return () => clearInterval(interval)
-  }, [isPlaying])
+  }, [isPlaying, audioUrl, duration])
+
+  // Setup audio element event listeners
+  useEffect(() => {
+    if (!audioRef.current) return
+
+    const audio = audioRef.current
+
+    const handlePlay = () => setIsPlaying(true)
+    const handlePause = () => setIsPlaying(false)
+    const handleLoadedMetadata = () => {
+      setDuration(audio.duration)
+    }
+    const handleTimeUpdate = () => {
+      setCurrentTime(audio.currentTime)
+    }
+
+    audio.addEventListener('play', handlePlay)
+    audio.addEventListener('pause', handlePause)
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata)
+    audio.addEventListener('timeupdate', handleTimeUpdate)
+
+    return () => {
+      audio.removeEventListener('play', handlePlay)
+      audio.removeEventListener('pause', handlePause)
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      audio.removeEventListener('timeupdate', handleTimeUpdate)
+    }
+  }, [audioUrl])
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -357,6 +521,23 @@ export default function YouTubePlayer() {
               </div>
             </div>
 
+            {/* Native Audio Player (Hidden) */}
+            {audioUrl && (
+              <div className="backdrop-blur-xl bg-white/10 rounded-2xl p-4 border border-white/20">
+                <p className="text-white/80 text-sm mb-2 text-center">Background Playback Enabled</p>
+                <audio
+                  ref={audioRef}
+                  src={audioUrl}
+                  preload="auto"
+                  className="hidden"
+                />
+                <div className="flex items-center justify-center gap-2 text-teal-300/80 text-xs">
+                  <Music className="w-4 h-4" />
+                  <span>Audio stream from backend API</span>
+                </div>
+              </div>
+            )}
+
             {/* Reset Button */}
             <button
               onClick={() => {
@@ -364,6 +545,11 @@ export default function YouTubePlayer() {
                 setUrl('')
                 setIsPlaying(false)
                 setIsAudioMode(false)
+                setAudioUrl(null)
+                if (audioRef.current) {
+                  audioRef.current.pause()
+                  audioRef.current.src = ''
+                }
                 if (playerRef.current) {
                   playerRef.current.destroy()
                   playerRef.current = null
