@@ -66,14 +66,15 @@ async def extract_stream(request: VideoRequest):
     try:
         logger.info(f"Extrayendo stream para: {request.url}")
 
-        # Configuración de yt-dlp
+        # Configuración de yt-dlp optimizada para evitar throttling
         ydl_opts = {
-            'format': 'bestaudio/best',  # Mejor calidad de audio
+            'format': 'bestaudio[ext=m4a]/bestaudio/best',  # Priorizar M4A
             'quiet': True,
             'no_warnings': True,
             'extract_flat': False,
-            'geo_bypass': True,
             'nocheckcertificate': True,
+            'prefer_free_formats': False,
+            'youtube_include_dash_manifest': False,  # Evitar DASH
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
