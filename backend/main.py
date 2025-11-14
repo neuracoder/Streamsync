@@ -15,15 +15,11 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS - permite requests desde Vercel
+# CORS - permite requests desde Railway y localhost (permisivo para testing)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://*.vercel.app",
-        "https://streamsync.vercel.app"  # Ajusta según tu dominio
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],  # Permite todos los orígenes temporalmente
+    allow_credentials=False,  # Debe ser False si allow_origins es "*"
     allow_methods=["*"],
     allow_headers=["*"],
 )
