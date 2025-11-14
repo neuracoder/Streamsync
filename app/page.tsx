@@ -25,6 +25,7 @@ export default function YouTubePlayer() {
   const [isMuted, setIsMuted] = useState(false)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [useBackendAudio, setUseBackendAudio] = useState(true)
+  const [wakeLock, setWakeLock] = useState<any>(null)
 
   const videoRef = useRef<HTMLIFrameElement>(null)
   const playerRef = useRef<any>(null)
@@ -89,6 +90,23 @@ export default function YouTubePlayer() {
     return null
   }
 
+  // Wake Lock API to prevent screen sleep during playback
+  const requestWakeLock = async () => {
+    try {
+      if ('wakeLock' in navigator) {
+        const lock = await (navigator as any).wakeLock.request('screen')
+        setWakeLock(lock)
+        console.log('Wake Lock activado')
+
+        lock.addEventListener('release', () => {
+          console.log('Wake Lock liberado')
+        })
+      }
+    } catch (err) {
+      console.error('Error al activar Wake Lock:', err)
+    }
+  }
+
   // Extract audio using backend API
   const handleExtractAudio = async (youtubeUrl: string) => {
     setIsLoading(true)
@@ -108,6 +126,9 @@ export default function YouTubePlayer() {
         setDuration(result.duration || 0)
         setIsLoading(false)
         sonnerToast.success('Audio listo para reproducir!')
+
+        // Activar Wake Lock cuando empiece la reproducción
+        await requestWakeLock()
 
         // Setup MediaSession for lockscreen controls
         if ('mediaSession' in navigator && result.title) {
@@ -353,6 +374,15 @@ export default function YouTubePlayer() {
     }
   }, [audioUrl])
 
+  // Cleanup Wake Lock on unmount
+  useEffect(() => {
+    return () => {
+      if (wakeLock) {
+        wakeLock.release()
+      }
+    }
+  }, [wakeLock])
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
     const secs = Math.floor(seconds % 60)
@@ -530,6 +560,25 @@ export default function YouTubePlayer() {
                   src={audioUrl}
                   preload="auto"
                   className="hidden"
+                  onPlay={async () => {
+                    await requestWakeLock()
+                    if ('mediaSession' in navigator) {
+                      navigator.mediaSession.playbackState = 'playing'
+                    }
+                  }}
+                  onPause={() => {
+                    if (wakeLock) {
+                      wakeLock.release()
+                    }
+                    if ('mediaSession' in navigator) {
+                      navigator.mediaSession.playbackState = 'paused'
+                    }
+                  }}
+                  onEnded={() => {
+                    if (wakeLock) {
+                      wakeLock.release()
+                    }
+                  }}
                 />
                 <div className="flex items-center justify-center gap-2 text-teal-300/80 text-xs">
                   <Music className="w-4 h-4" />
